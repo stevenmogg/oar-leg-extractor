@@ -131,7 +131,7 @@ def interpolate_between_points(gate_point, track_df, idx1, idx2, idx3):
     else:
         interpolated_altitude = None
     
-    return closest_distance, interpolated_time, interpolated_altitude
+    return closest_distance, interpolated_time, interpolated_altitude, closest_lat, closest_lon
 
 def find_closest_point_on_geodesic_line(gate_pos, p1_pos, p2_pos):
     """
@@ -227,6 +227,8 @@ def calculate_closest_approach(waypoints_df, gpx, wheels_off_time=None):
         waypoints_df['time_interval_sec'] = None
         waypoints_df['closest_approach_time'] = None
         waypoints_df['closest_approach_altitude'] = None
+        waypoints_df['closest_approach_lat'] = None
+        waypoints_df['closest_approach_lon'] = None
         return waypoints_df
     
     results = []
@@ -254,11 +256,13 @@ def calculate_closest_approach(waypoints_df, gpx, wheels_off_time=None):
                 'closest_approach_distance_m': None,
                 'time_interval_sec': None,
                 'closest_approach_time': None,
-                'closest_approach_altitude': None
+                'closest_approach_altitude': None,
+                'closest_approach_lat': None,
+                'closest_approach_lon': None
             })
             continue
         
-        closest_distance, closest_time, closest_altitude = result
+        closest_distance, closest_time, closest_altitude, closest_lat, closest_lon = result
         
         # Calculate time interval from previous closest approach point
         if previous_closest_time is not None:
@@ -272,7 +276,9 @@ def calculate_closest_approach(waypoints_df, gpx, wheels_off_time=None):
             'closest_approach_distance_m': closest_distance,
             'time_interval_sec': time_interval,
             'closest_approach_time': closest_time,
-            'closest_approach_altitude': closest_altitude
+            'closest_approach_altitude': closest_altitude,
+            'closest_approach_lat': closest_lat,
+            'closest_approach_lon': closest_lon
         })
     
     # Add results to dataframe
@@ -280,6 +286,8 @@ def calculate_closest_approach(waypoints_df, gpx, wheels_off_time=None):
     waypoints_df['time_interval_sec'] = [r['time_interval_sec'] for r in results]
     waypoints_df['closest_approach_time'] = [r['closest_approach_time'] for r in results]
     waypoints_df['closest_approach_altitude'] = [r['closest_approach_altitude'] for r in results]
+    waypoints_df['closest_approach_lat'] = [r['closest_approach_lat'] for r in results]
+    waypoints_df['closest_approach_lon'] = [r['closest_approach_lon'] for r in results]
     
     return waypoints_df
 
@@ -557,114 +565,177 @@ def create_comprehensive_map(track_df, waypoints_df, gpx):
     """
     Create a comprehensive folium map showing:
     - Blue markers for track points with hover details
-    - Yellow markers for waypoints with hover details  
+    - Orange markers for waypoints with hover details  
     - Red markers for closest approach points with analysis data
     """
-    if track_df.empty:
+    # Check if we have any data to display
+    if track_df.empty and waypoints_df.empty and (not gpx or not hasattr(gpx, 'waypoints') or not gpx.waypoints):
         return None
     
     # Calculate center of the map
-    center_lat = track_df['latitude'].mean()
-    center_lon = track_df['longitude'].mean()
+    if not track_df.empty:
+        center_lat = track_df['latitude'].mean()
+        center_lon = track_df['longitude'].mean()
+    elif not waypoints_df.empty:
+        center_lat = waypoints_df['latitude'].mean()
+        center_lon = waypoints_df['longitude'].mean()
+    elif gpx and hasattr(gpx, 'waypoints') and gpx.waypoints:
+        # Use GPX waypoints if no other data
+        lats = [wp.latitude for wp in gpx.waypoints]
+        lons = [wp.longitude for wp in gpx.waypoints]
+        center_lat = sum(lats) / len(lats)
+        center_lon = sum(lons) / len(lons)
+    else:
+        # Fallback center (shouldn't reach here due to earlier check)
+        center_lat = 0
+        center_lon = 0
     
     # Create the map
-    m = folium.Map(
+    print(f"DEBUG: Creating comprehensive map centered at {center_lat}, {center_lon}")
+    m1 = folium.Map(
         location=[center_lat, center_lon],
         zoom_start=10,
         tiles='OpenStreetMap'
     )
     
-    # Add track points as blue markers
-    for idx, row in track_df.iterrows():
-        # Create popup content for track points
-        popup_content = f"""
-        <div style="width: 300px;">
-            <h4>Track Point {idx}</h4>
-            <table style="width: 100%; font-size: 12px;">
-        """
-        
-        for col in track_df.columns:
-            value = row[col]
-            if pd.isna(value):
-                value = "N/A"
-            elif isinstance(value, (int, float)):
-                value = f"{value:.6f}" if isinstance(value, float) else str(value)
-            elif isinstance(value, datetime):
-                value = value.strftime("%Y-%m-%d %H:%M:%S")
-            else:
-                value = str(value)
-            
-            popup_content += f"""
-                <tr>
-                    <td style="font-weight: bold; padding: 2px;">{col}:</td>
-                    <td style="padding: 2px;">{value}</td>
-                </tr>
-            """
-        
-        popup_content += """
-            </table>
-        </div>
-        """
-        
-        # Add blue marker for track point
-        folium.Marker(
-            location=[row['latitude'], row['longitude']],
-            popup=folium.Popup(popup_content, max_width=350),
-            tooltip=f"Track Point {idx}",
-            icon=folium.Icon(color='blue', icon='info-sign')
-        ).add_to(m)
-    
-    # Add track line
-    track_coords = track_df[['latitude', 'longitude']].values.tolist()
-    folium.PolyLine(
-        track_coords,
-        color='blue',
-        weight=2,
-        opacity=0.8
-    ).add_to(m)
-    
-    # Add waypoints as yellow markers
-    if not waypoints_df.empty:
-        for idx, waypoint in waypoints_df.iterrows():
-            # Create popup content for waypoints
+    # Add track points as blue markers (only if track data exists)
+    if not track_df.empty:
+        for idx, row in track_df.iterrows():
+            # Create popup content for track points
             popup_content = f"""
             <div style="width: 300px;">
-                <h4>Waypoint: {waypoint['name']}</h4>
+                <h4>Track Point {idx}</h4>
                 <table style="width: 100%; font-size: 12px;">
-                    <tr><td style="font-weight: bold;">Latitude:</td><td>{waypoint['latitude']:.6f}</td></tr>
-                    <tr><td style="font-weight: bold;">Longitude:</td><td>{waypoint['longitude']:.6f}</td></tr>
             """
-            
-            if 'altitude' in waypoint and pd.notna(waypoint['altitude']):
-                popup_content += f"<tr><td style='font-weight: bold;'>Altitude:</td><td>{waypoint['altitude']:.1f} m</td></tr>"
+        
+            for col in track_df.columns:
+                value = row[col]
+                if pd.isna(value):
+                    value = "N/A"
+                elif isinstance(value, (int, float)):
+                    value = f"{value:.6f}" if isinstance(value, float) else str(value)
+                elif isinstance(value, datetime):
+                    value = value.strftime("%Y-%m-%d %H:%M:%S")
+                else:
+                    value = str(value)
+                
+                popup_content += f"""
+                    <tr>
+                        <td style="font-weight: bold; padding: 2px;">{col}:</td>
+                        <td style="padding: 2px;">{value}</td>
+                    </tr>
+                """
             
             popup_content += """
                 </table>
             </div>
             """
             
-            # Add yellow marker for waypoint
+            # Add blue marker for track point
             folium.Marker(
+                location=[row['latitude'], row['longitude']],
+                popup=folium.Popup(popup_content, max_width=350),
+                tooltip=f"Track Point {idx}",
+                icon=folium.Icon(color='blue', icon='info-sign')
+            ).add_to(m1)
+    
+    # Add track line (only if track data exists)
+    if not track_df.empty:
+        track_coords = track_df[['latitude', 'longitude']].values.tolist()
+        folium.PolyLine(
+            track_coords,
+            color='blue',
+            weight=2,
+            opacity=0.8
+        ).add_to(m1)
+    
+    # Add waypoints as orange markers
+    print(f"DEBUG: Adding {len(waypoints_df)} waypoints to comprehensive map")
+    if not waypoints_df.empty:
+        for idx, waypoint in waypoints_df.iterrows():
+            print(f"DEBUG: Adding waypoint {waypoint['name']} at {waypoint['latitude']}, {waypoint['longitude']}")
+            # Create popup content for waypoints
+            popup_content = f"""
+            <div style="width: 300px;">
+                <h4>Waypoint: {waypoint['name']}</h4>
+                <table style="width: 100%; font-size: 12px;">
+                    <tr><td style="font-weight: bold;">Latitude:</td><td>{float(waypoint['latitude']):.6f}</td></tr>
+                    <tr><td style="font-weight: bold;">Longitude:</td><td>{float(waypoint['longitude']):.6f}</td></tr>
+            """
+            
+            if 'altitude' in waypoint and pd.notna(waypoint['altitude']):
+                popup_content += f"<tr><td style='font-weight: bold;'>Altitude:</td><td>{float(waypoint['altitude']):.1f} ft</td></tr>"
+            
+            popup_content += """
+                </table>
+            </div>
+            """
+            
+            # Add orange marker for waypoint
+            print(f"DEBUG: Creating marker for {waypoint['name']} at {waypoint['latitude']}, {waypoint['longitude']}")
+            marker = folium.Marker(
                 location=[waypoint['latitude'], waypoint['longitude']],
                 popup=folium.Popup(popup_content, max_width=350),
                 tooltip=f"Waypoint: {waypoint['name']}",
-                icon=folium.Icon(color='yellow', icon='info-sign')
-            ).add_to(m)
+                icon=folium.Icon(color='orange', icon='info-sign')
+            )
+            marker.add_to(m1)
+            print(f"DEBUG: Marker added to map for {waypoint['name']}")
+    
+    # Add actual GPX waypoints as green markers
+    if gpx and hasattr(gpx, 'waypoints') and gpx.waypoints:
+        for waypoint in gpx.waypoints:
+            # Create popup content for GPX waypoints
+            popup_content = f"""
+            <div style="width: 300px;">
+                <h4>GPX Waypoint: {waypoint.name if waypoint.name else 'Unnamed'}</h4>
+                <table style="width: 100%; font-size: 12px;">
+                    <tr><td style="font-weight: bold;">Latitude:</td><td>{waypoint.latitude:.6f}</td></tr>
+                    <tr><td style="font-weight: bold;">Longitude:</td><td>{waypoint.longitude:.6f}</td></tr>
+            """
+            
+            if waypoint.elevation is not None:
+                popup_content += f"<tr><td style='font-weight: bold;'>Altitude:</td><td>{waypoint.elevation:.1f} ft</td></tr>"
+            
+            popup_content += """
+                </table>
+            </div>
+            """
+            
+            # Add green marker for GPX waypoint
+            folium.Marker(
+                location=[waypoint.latitude, waypoint.longitude],
+                popup=folium.Popup(popup_content, max_width=350),
+                tooltip=f"GPX Waypoint: {waypoint.name if waypoint.name else 'Unnamed'}",
+                icon=folium.Icon(color='green', icon='info-sign')
+            ).add_to(m1)
     
     # Add closest approach points as red markers
     if not waypoints_df.empty and 'closest_approach_distance_m' in waypoints_df.columns:
         for idx, waypoint in waypoints_df.iterrows():
             if pd.notna(waypoint['closest_approach_distance_m']):
+                print(f"DEBUG: Adding closest approach point for {waypoint['name']}")
+                # Use the actual closest approach coordinates, not the waypoint coordinates
+                closest_lat = waypoint['closest_approach_lat'] if pd.notna(waypoint['closest_approach_lat']) else waypoint['latitude']
+                closest_lon = waypoint['closest_approach_lon'] if pd.notna(waypoint['closest_approach_lon']) else waypoint['longitude']
+                print(f"DEBUG: Waypoint at {waypoint['latitude']}, {waypoint['longitude']}, Closest approach at {closest_lat}, {closest_lon}")
                 # Create popup content for closest approach analysis
                 popup_content = f"""
                 <div style="width: 350px;">
                     <h4>Closest Approach: {waypoint['name']}</h4>
                     <table style="width: 100%; font-size: 12px;">
-                        <tr><td style="font-weight: bold;">Distance:</td><td>{waypoint['closest_approach_distance_m']:.1f} m</td></tr>
+                        <tr><td style="font-weight: bold;">Distance:</td><td>{float(waypoint['closest_approach_distance_m']):.1f} m</td></tr>
                 """
                 
+                # Add closest approach coordinates if available
+                if 'closest_approach_lat' in waypoint and pd.notna(waypoint['closest_approach_lat']):
+                    popup_content += f"<tr><td style='font-weight: bold;'>Closest Point Lat:</td><td>{float(waypoint['closest_approach_lat']):.6f}</td></tr>"
+                
+                if 'closest_approach_lon' in waypoint and pd.notna(waypoint['closest_approach_lon']):
+                    popup_content += f"<tr><td style='font-weight: bold;'>Closest Point Lon:</td><td>{float(waypoint['closest_approach_lon']):.6f}</td></tr>"
+                
                 if 'closest_approach_altitude' in waypoint and pd.notna(waypoint['closest_approach_altitude']):
-                    popup_content += f"<tr><td style='font-weight: bold;'>Altitude:</td><td>{waypoint['closest_approach_altitude']:.1f} m</td></tr>"
+                    popup_content += f"<tr><td style='font-weight: bold;'>Altitude:</td><td>{float(waypoint['closest_approach_altitude']):.1f} ft</td></tr>"
                 
                 if 'time_interval_sec' in waypoint and pd.notna(waypoint['time_interval_sec']):
                     interval_formatted = format_time_interval(waypoint['time_interval_sec'])
@@ -680,11 +751,18 @@ def create_comprehensive_map(track_df, waypoints_df, gpx):
                 """
                 
                 # Add red marker for closest approach point
+                # Use the actual closest approach coordinates, not the waypoint coordinates
+                closest_lat = waypoint['closest_approach_lat'] if pd.notna(waypoint['closest_approach_lat']) else waypoint['latitude']
+                closest_lon = waypoint['closest_approach_lon'] if pd.notna(waypoint['closest_approach_lon']) else waypoint['longitude']
+                
                 folium.Marker(
-                    location=[waypoint['latitude'], waypoint['longitude']],
+                    location=[closest_lat, closest_lon],
                     popup=folium.Popup(popup_content, max_width=400),
                     tooltip=f"Closest Approach: {waypoint['name']}",
                     icon=folium.Icon(color='red', icon='info-sign')
-                ).add_to(m)
+                ).add_to(m1)
     
-    return m 
+    print(f"DEBUG: Comprehensive map created successfully with center at {center_lat}, {center_lon}")
+    return m1 
+
+ 

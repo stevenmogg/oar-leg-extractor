@@ -158,9 +158,11 @@ if uploaded_file is not None:
             waypoints_df = extract_routes(root, legs_df.iloc[0]['leg_guid'] if not legs_df.empty else None)
             
             if not waypoints_df.empty:
+                st.write(f"DEBUG: Found {len(waypoints_df)} waypoints before filtering")
                 # Filter waypoints if needed
                 if not show_all_waypoints:
                     waypoints_df = waypoints_df[waypoints_df['name'].apply(is_in_or_out_with_number)]
+                    st.write(f"DEBUG: After filtering: {len(waypoints_df)} waypoints")
                 
                 # Calculate closest approach analysis
                 waypoints_df = calculate_closest_approach(waypoints_df, gpx, wheels_off_time)
@@ -189,7 +191,9 @@ if uploaded_file is not None:
                     'closest_approach_distance_m': 'Closest Approach',
                     'Interval': 'Interval',
                     'Time from Start': 'Time from Start',
-                    'closest_approach_altitude': 'Closest Approach Altitude'
+                    'closest_approach_altitude': 'Closest Approach Altitude',
+                    'closest_approach_lat': 'Closest Point Lat',
+                    'closest_approach_lon': 'Closest Point Lon'
                 }
                 
                 # Only include columns that exist in the dataframe
@@ -207,18 +211,23 @@ if uploaded_file is not None:
                 except Exception as e:
                     st.warning(f"Could not compute waypoint time interval matrix: {e}")
 
-                # Add button to view comprehensive map
-                if st.button("View Comprehensive Map", type="primary"):
-                    try:
-                        comprehensive_map = create_comprehensive_map(track_df, waypoints_df, gpx)
-                        if comprehensive_map is not None:
-                            st.subheader("Comprehensive Flight Analysis Map")
-                            st.write("**Legend:** Blue = Track Points, Yellow = Waypoints, Red = Closest Approach Points")
-                            folium_static(comprehensive_map, width=800, height=600)
-                        else:
-                            st.warning("Could not create comprehensive map - no track data available.")
-                    except Exception as e:
-                        st.error(f"Error creating comprehensive map: {str(e)}")
+                # Create and display the comprehensive map
+                st.subheader("Flight Analysis Map")
+                
+                comprehensive_map = None
+                
+                try:
+                    comprehensive_map = create_comprehensive_map(track_df, waypoints_df, gpx)
+                except Exception as e:
+                    st.error(f"Error creating comprehensive map: {str(e)}")
+                    st.exception(e)  # This will show the full traceback
+                
+                # Display the comprehensive map
+                if comprehensive_map is not None:
+                    st.write("**Legend:** Blue = Track Points (if available), Orange = Waypoints, Red = Closest Approach Points")
+                    folium_static(comprehensive_map, width=800, height=600)
+                else:
+                    st.warning("Could not create comprehensive map - no data available.")
 
                 # Show statistics
                 if 'closest_approach_distance_m' in waypoints_df.columns:
